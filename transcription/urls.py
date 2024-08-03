@@ -1,10 +1,6 @@
-from django.urls import path, include
-from rest_framework.routers import DefaultRouter
-from .views import TranscriptionViewSet
-
-router = DefaultRouter()
-router.register(r'transcriptions', TranscriptionViewSet)
+from django.urls import path
+from .views import TranscriptionView
 
 urlpatterns = [
-    path('', include(router.urls)),
+    path('transcribe/', TranscriptionView.as_view(), name='transcribe'),
 ]

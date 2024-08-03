@@ -1,6 +1,5 @@
-from rest_framework import viewsets, status
+from rest_framework import views, status
 from rest_framework.response import Response
-from rest_framework.decorators import action
 from .models import Transcription, Speaker
 from .serializers import TranscriptionSerializer
 import torch
@@ -10,25 +9,22 @@ from pydub import AudioSegment
 import numpy as np
 import re
 
-class TranscriptionViewSet(viewsets.ModelViewSet):
-    queryset = Transcription.objects.all()
-    serializer_class = TranscriptionSerializer
+class TranscriptionView(views.APIView):
+    def post(self, request):
+        audio_file = request.FILES.get('audio_file')
+        if not audio_file:
+            return Response({"error": "No audio file provided"}, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=True, methods=['post'])
-    def process(self, request, pk=None):
-        transcription = self.get_object()
-        
-        if transcription.processed:
-            return Response({"message": "This audio has already been processed."}, status=status.HTTP_400_BAD_REQUEST)
+        # Save the audio file
+        transcription = Transcription.objects.create(audio_file=audio_file)
 
-        # Your existing code for processing the audio file
+        # Process the audio file
         hugging_face_token = "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"
         pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=hugging_face_token)
         whisper_model = whisper.load_model("base")
 
-        audio_file = transcription.audio_file.path
-        audio = AudioSegment.from_wav(audio_file)
-        diarization = pipeline(audio_file)
+        audio_file_path = transcription.audio_file.path
+        diarization = pipeline(audio_file_path)
 
         def transcribe_segment(audio_file, start, end):
             audio = whisper.load_audio(audio_file)
@@ -46,24 +42,27 @@ class TranscriptionViewSet(viewsets.ModelViewSet):
 
         results = []
         speaker_names = {}
+        full_transcript = []
 
         for turn, _, speaker in diarization.itertracks(yield_label=True):
-            transcription_text = transcribe_segment(audio_file, turn.start, turn.end)
+            transcription_text = transcribe_segment(audio_file_path, turn.start, turn.end)
             
             if speaker not in speaker_names:
                 name = extract_name(transcription_text)
                 if name:
                     speaker_names[speaker] = name
                 else:
-                    speaker_names[speaker] = speaker
+                    speaker_names[speaker] = f"Speaker {len(speaker_names) + 1}"
 
             results.append((speaker_names[speaker], transcription_text))
+            full_transcript.append(f"{speaker_names[speaker]}: {transcription_text}")
 
         # Save results to the database
         for speaker, text in results:
             Speaker.objects.create(transcription=transcription, name=speaker, text=text)
 
-        transcription.processed = True
+        transcription.transcript = "\n".join(full_transcript)
         transcription.save()
 
-        return Response({"message": "Audio processed successfully."}, status=status.HTTP_200_OK)
+        serializer = TranscriptionSerializer(transcription)
+        return Response(serializer.data, status=status.HTTP_200_OK)
